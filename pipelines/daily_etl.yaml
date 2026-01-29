@@ -1,0 +1,97 @@
+# Daily ETL Pipeline Configuration
+# This pipeline runs daily at 2 AM UTC to process sales data
+
+name: daily_etl
+description: "Daily sales data extraction, cleaning, and summarization"
+version: "1.0.0"
+schedule: "0 2 * * *"  # cron: 2 AM UTC daily
+timezone: "UTC"
+
+# Pipeline-level configuration
+config:
+  max_retries: 3
+  retry_delay: "60s"
+  timeout: "2h"
+
+# Environment variables available to all tasks
+env:
+  DATASET: sales_data
+  PROJECT_ID: ${GCP_PROJECT_ID}
+
+# Task definitions - executed in order
+tasks:
+  - name: extract
+    description: "Extract raw sales data from source systems"
+    type: python
+    function: functions/extract_data.py
+    entrypoint: main
+    memory: "2Gi"
+    cpu: "1"
+    timeout: "30m"
+    env:
+      SOURCE_TABLE: raw_transactions
+      BATCH_SIZE: "10000"
+    retry:
+      max_attempts: 3
+      backoff: "exponential"
+
+  - name: sql_clean
+    description: "Clean and validate extracted data"
+    type: sql
+    file: sql/sales_clean.sql
+    destination:
+      dataset: sales_data
+      table: cleaned_transactions
+      write_disposition: WRITE_TRUNCATE
+    depends_on:
+      - extract
+
+  - name: transform
+    description: "Apply business transformations"
+    type: python
+    function: functions/transform_sales.py
+    entrypoint: main
+    memory: "4Gi"
+    cpu: "2"
+    timeout: "45m"
+    env:
+      INPUT_TABLE: cleaned_transactions
+      OUTPUT_TABLE: transformed_sales
+    depends_on:
+      - sql_clean
+
+  - name: summary
+    description: "Generate daily summary aggregations"
+    type: sql
+    file: sql/daily_summary.sql
+    destination:
+      dataset: sales_data
+      table: daily_summary
+      write_disposition: WRITE_APPEND
+      partitioning:
+        field: summary_date
+        type: DAY
+    depends_on:
+      - transform
+
+# Alerting configuration
+alerting:
+  on_success:
+    - slack:
+        channel: "#data-pipeline"
+        message: "Daily ETL completed successfully"
+  on_failure:
+    - slack:
+        channel: "#data-pipeline-alerts"
+        message: "Daily ETL failed at step: ${FAILED_STEP}"
+        mention: "@oncall"
+    - email:
+        to:
+          - data-team@example.com
+        subject: "Pipeline Failure: daily_etl"
+
+# Resource labels for cost tracking
+labels:
+  team: data-engineering
+  environment: production
+  cost_center: analytics

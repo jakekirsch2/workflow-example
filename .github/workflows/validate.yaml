@@ -1,0 +1,203 @@
+# GitHub Actions workflow to validate pipeline configurations
+# Runs on every push and pull request
+
+name: Validate Pipelines
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'pipelines/**'
+      - 'functions/**'
+      - 'sql/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'pipelines/**'
+      - 'functions/**'
+      - 'sql/**'
+
+jobs:
+  validate-yaml:
+    name: Validate YAML Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Validate YAML files
+        run: |
+          yamllint -d "{extends: relaxed, rules: {line-length: {max: 200}}}" pipelines/
+
+  validate-python:
+    name: Validate Python Functions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r functions/requirements.txt
+          pip install flake8 black mypy
+
+      - name: Lint with flake8
+        run: |
+          flake8 functions/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 functions/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Check formatting with black
+        run: black --check functions/
+
+      - name: Type check with mypy
+        run: mypy functions/ --ignore-missing-imports || true
+
+  validate-sql:
+    name: Validate SQL Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install sqlfluff
+        run: pip install sqlfluff
+
+      - name: Lint SQL files
+        run: |
+          sqlfluff lint sql/ --dialect bigquery || true
+
+  validate-schema:
+    name: Validate Pipeline Schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install pyyaml jsonschema
+
+      - name: Validate pipeline schema
+        run: |
+          python - << 'EOF'
+          import yaml
+          import sys
+          from pathlib import Path
+
+          # Define required fields
+          REQUIRED_FIELDS = ['name', 'tasks']
+          VALID_TASK_TYPES = ['python', 'sql']
+          REQUIRED_PYTHON_FIELDS = ['function']
+          REQUIRED_SQL_FIELDS = ['file']
+
+          errors = []
+
+          for pipeline_file in Path('pipelines').glob('*.yaml'):
+              print(f"Validating {pipeline_file}...")
+
+              with open(pipeline_file) as f:
+                  try:
+                      pipeline = yaml.safe_load(f)
+                  except yaml.YAMLError as e:
+                      errors.append(f"{pipeline_file}: Invalid YAML - {e}")
+                      continue
+
+              # Check required fields
+              for field in REQUIRED_FIELDS:
+                  if field not in pipeline:
+                      errors.append(f"{pipeline_file}: Missing required field '{field}'")
+
+              # Validate tasks
+              tasks = pipeline.get('tasks', [])
+              if not tasks:
+                  errors.append(f"{pipeline_file}: No tasks defined")
+
+              task_names = set()
+              for i, task in enumerate(tasks):
+                  task_name = task.get('name', f'task_{i}')
+
+                  # Check for duplicate names
+                  if task_name in task_names:
+                      errors.append(f"{pipeline_file}: Duplicate task name '{task_name}'")
+                  task_names.add(task_name)
+
+                  # Check task type
+                  task_type = task.get('type')
+                  if task_type not in VALID_TASK_TYPES:
+                      errors.append(f"{pipeline_file}: Task '{task_name}' has invalid type '{task_type}'")
+
+                  # Check type-specific required fields
+                  if task_type == 'python':
+                      for field in REQUIRED_PYTHON_FIELDS:
+                          if field not in task:
+                              errors.append(f"{pipeline_file}: Python task '{task_name}' missing '{field}'")
+
+                      # Check function file exists
+                      func_path = task.get('function')
+                      if func_path and not Path(func_path).exists():
+                          errors.append(f"{pipeline_file}: Function file '{func_path}' not found")
+
+                  elif task_type == 'sql':
+                      for field in REQUIRED_SQL_FIELDS:
+                          if field not in task:
+                              errors.append(f"{pipeline_file}: SQL task '{task_name}' missing '{field}'")
+
+                      # Check SQL file exists
+                      sql_path = task.get('file')
+                      if sql_path and not Path(sql_path).exists():
+                          errors.append(f"{pipeline_file}: SQL file '{sql_path}' not found")
+
+              # Validate schedule if present
+              schedule = pipeline.get('schedule')
+              if schedule:
+                  # Basic cron validation
+                  parts = schedule.split()
+                  if len(parts) != 5:
+                      errors.append(f"{pipeline_file}: Invalid cron schedule '{schedule}'")
+
+              print(f"  ✓ {pipeline_file} validated")
+
+          if errors:
+              print("\n❌ Validation errors found:")
+              for error in errors:
+                  print(f"  - {error}")
+              sys.exit(1)
+          else:
+              print("\n✓ All pipelines validated successfully")
+          EOF
+
+  test-functions:
+    name: Test Python Functions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r functions/requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Run tests
+        run: |
+          # Run tests if they exist
+          if [ -d "tests" ]; then
+            pytest tests/ -v --cov=functions
+          else
+            echo "No tests directory found, skipping tests"
+          fi
+        env:
+          PROJECT_ID: test-project
+          DATASET: test_dataset
