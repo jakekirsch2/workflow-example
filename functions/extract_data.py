@@ -30,7 +30,7 @@ def main():
     task_name = os.environ.get('TASK_NAME', 'extract')
 
     logger.info(f"Configuration:")
-    logger.info(f"  Project ID: {project_id} test")
+    logger.info(f"  Project ID: {project_id}")
     logger.info(f"  Dataset: {dataset}")
     logger.info(f"  Source Table: {source_table}")
     logger.info(f"  Batch Size: {batch_size}")
