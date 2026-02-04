@@ -1,64 +1,25 @@
-name: daily_etl
+name: daily-etl
 description: "Daily sales data extraction and transformation"
-version: "1.0.0"
 schedule: "0 2 * * *"
-timezone: "UTC"
-
-config:
-  max_retries: 3
-  retry_delay: "60s"
-  timeout: "2h"
-
-env:
-  DATASET: sales_data
-  PROJECT_ID: ${GCP_PROJECT_ID}
 
 tasks:
   - name: extract
     description: "Extract raw sales data from source systems"
     type: python
     function: functions/extract_data.py
-    entrypoint: main
     memory: "2Gi"
     cpu: "1"
     timeout: "30m"
     env:
       SOURCE_TABLE: raw_transactions
       BATCH_SIZE: "10000"
-    retry:
-      max_attempts: 3
-      backoff: "exponential"
 
   - name: transform
     description: "Clean, validate, and apply business transformations"
     type: python
     function: functions/transform_sales.py
-    entrypoint: main
     memory: "4Gi"
     cpu: "2"
     timeout: "45m"
-    env:
-      INPUT_TABLE: staging_raw_transactions
-      OUTPUT_TABLE: transformed_sales
     depends_on:
       - extract
-
-alerting:
-  on_success:
-    - slack:
-        channel: "#data-pipeline"
-        message: "Daily ETL completed successfully"
-  on_failure:
-    - slack:
-        channel: "#data-pipeline-alerts"
-        message: "Daily ETL failed at step: ${FAILED_STEP}"
-        mention: "@oncall"
-    - email:
-        to:
-          - data-team@example.com
-        subject: "Pipeline Failure: daily_etl"
-
-labels:
-  team: data-engineering
-  environment: production
-  cost_center: analytics
