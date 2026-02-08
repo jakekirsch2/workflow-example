@@ -28,6 +28,17 @@ git commit -m "Update pipeline"
 git push
 ```
 
+### Branch-based Environments
+
+The platform automatically deploys to different environments based on your branch:
+
+| Branch | Environment |
+|--------|-------------|
+| `main` or `master` | Production |
+| `dev` or `develop` | Development |
+
+This allows you to test changes in development before promoting to production.
+
 ## Repository Structure
 
 ```
