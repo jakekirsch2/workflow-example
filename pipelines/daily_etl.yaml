@@ -13,7 +13,7 @@ tasks:
       - "sales_data"        # dataset
     memory: "2Gi"
     cpu: "1"
-    timeout: "30m"
+    timeout: "35m"
 
   - name: transform
     description: "Clean, validate, and apply business transformations"
