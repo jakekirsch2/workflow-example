@@ -7,9 +7,10 @@ This is a template repository for the Serverless Workflow Orchestration Platform
 ### 1. Clone this repository
 
 ```bash
-git clone https://github.com/jakekirsch2/workflow-example.git
-cd workflow-example
+git clone https://github.com/jakekirsch2/workflow-example.git {my-repo-name}
+cd {my-repo-name}
 ```
+Create repo in GitHub
 
 ### 2. Connect to the platform
 
