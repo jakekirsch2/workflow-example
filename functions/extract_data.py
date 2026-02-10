@@ -39,7 +39,7 @@ def main(source_table: str = "raw_transactions", dataset: str = "sales_data"):
     batch_size = int(os.environ.get('BATCH_SIZE', '10000'))
 
     logger.info(f"Configuration:")
-    logger.info(f"  Project ID: {project_id} test deploy")
+    logger.info(f"  Project ID: {project_id} test")
     logger.info(f"  Dataset: {dataset}")
     logger.info(f"  Source Table: {source_table}")
     logger.info(f"  Batch Size: {batch_size}")

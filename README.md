@@ -9,6 +9,8 @@ This is a template repository for the Serverless Workflow Orchestration Platform
 ```bash
 git clone https://github.com/jakekirsch2/workflow-example.git {my-repo-name}
 cd {my-repo-name}
+git remote set-url origin https://github.com/{my-username}/{my-repo-name}.git
+git push -u origin main
 ```
 Create repo in GitHub
 
