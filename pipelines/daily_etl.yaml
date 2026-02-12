@@ -11,9 +11,6 @@ tasks:
     args:
       - "raw_transactions"  # source_table
       - "sales_data"        # dataset
-    memory: "2Gi"
-    cpu: "1"
-    timeout: "30m"
 
   - name: transform
     description: "Clean, validate, and apply business transformations"
@@ -21,8 +18,5 @@ tasks:
     function: functions/transform_sales.py
     entrypoint: main
     args: []
-    memory: "4Gi"
-    cpu: "2"
-    timeout: "45m"
     depends_on:
       - extract

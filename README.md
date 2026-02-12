@@ -9,6 +9,8 @@ This is a template repository for the Serverless Workflow Orchestration Platform
 ```bash
 git clone https://github.com/jakekirsch2/workflow-example.git {my-repo-name}
 cd {my-repo-name}
+git remote set-url origin https://github.com/{my-username}/{my-repo-name}.git
+git push -u origin main
 ```
 Create repo in GitHub
 
@@ -44,14 +46,37 @@ This allows you to test changes in development before promoting to production.
 
 ```
 workflow-example/
-├── pipelines/              # Pipeline definitions (YAML)
-│   └── daily_etl.yaml      # Example ETL pipeline
-├── functions/              # Python functions
-│   ├── extract_data.py     # Data extraction
-│   ├── transform_sales.py  # Data transformation
-│   └── requirements.txt    # Python dependencies
+├── config.yaml                # Repo-level config (Python version, resources)
+├── pipelines/                 # Pipeline definitions (YAML)
+│   └── daily_etl.yaml         # Example ETL pipeline
+├── functions/                 # Python functions
+│   ├── extract_data.py        # Data extraction
+│   ├── transform_sales.py     # Data transformation
+│   └── requirements.txt       # Python dependencies
 └── README.md
 ```
+
+## Repository Configuration
+
+The `config.yaml` file in your repo root defines the Python version and resource limits for your runner job. All tasks in the repo share these settings.
+
+```yaml
+python_version: "3.11"
+cpu: "2"
+memory: "4Gi"
+timeout: "45m"
+```
+
+### Config Fields
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `python_version` | `"3.11"` | Python version for the Docker image (e.g. `"3.11"`, `"3.12"`) |
+| `cpu` | `"1"` | vCPU allocation (`"0.5"`, `"1"`, `"2"`, etc.) |
+| `memory` | `"2Gi"` | Memory allocation (`"512Mi"`, `"2Gi"`, `"4Gi"`, etc.) |
+| `timeout` | `"30m"` | Max execution time per task (`"30m"`, `"3600s"`, `"1h"`) |
+
+If `config.yaml` is missing, defaults are used.
 
 ## Pipeline Definition
 
@@ -70,8 +95,6 @@ tasks:
     args:
       - "raw_transactions"
       - "sales_data"
-    memory: "2Gi"
-    cpu: "1"
 
   - name: transform
     type: python
@@ -79,8 +102,6 @@ tasks:
     entrypoint: main
     depends_on:
       - extract
-    memory: "4Gi"
-    cpu: "2"
 ```
 
 ### Pipeline Fields
@@ -102,8 +123,6 @@ tasks:
 | `entrypoint` | Function to call (default: `main`) |
 | `args` | Arguments passed to the function (as positional args) |
 | `depends_on` | List of tasks that must complete first |
-| `memory` | Memory allocation (`512Mi`, `2Gi`, etc.) |
-| `cpu` | CPU allocation (`1`, `2`, etc.) |
 
 ## Writing Python Functions
 
