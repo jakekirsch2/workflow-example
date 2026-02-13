@@ -22,7 +22,7 @@ tasks:
       - extract
 
   - name: update_summary
-    description: "Update daily sales summary table in BigQuery test"
+    description: "Update daily sales summary table in BigQuery"
     type: sql
     query: queries/update_summary.sql
     schema: sales
