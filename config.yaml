@@ -6,3 +6,5 @@ timeout: "45m"
 schemas:
   - sales
   - analytics
+
+pip_packages: []

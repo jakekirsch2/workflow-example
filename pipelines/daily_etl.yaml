@@ -20,11 +20,3 @@ tasks:
     args: []
     depends_on:
       - extract
-
-  - name: update_summary
-    description: "Update daily sales summary table in BigQuery test"
-    type: sql
-    query: queries/update_summary.sql
-    schema: sales
-    depends_on:
-      - transform
