@@ -3,11 +3,10 @@
 Extract Data Function (Demo Stub)
 Demonstrates the extraction step of the ETL pipeline.
 
-Functions receive arguments from the pipeline YAML definition.
-Environment variables are still available for secrets and global config.
+Functions receive a SparkSession as the first argument, followed by
+any additional arguments from the pipeline YAML definition.
 """
 
-import os
 import json
 import logging
 from datetime import datetime, timedelta
@@ -19,33 +18,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def main(source_table: str = "raw_transactions", dataset: str = "sales_data"):
+def main(spark, source_table: str = "raw_transactions", dataset: str = "sales_data"):
     """
     Main entry point for the extraction function.
 
     Args:
+        spark: SparkSession with Iceberg catalog configured
         source_table: The source table to extract from
         dataset: The dataset name to use
     """
     logger.info("Starting data extraction (demo mode)")
 
-    # Get system config from environment (set by the platform)
-    project_id = os.environ.get('PROJECT_ID', 'demo-project')
-    execution_id = os.environ.get('EXECUTION_ID', 'local-run')
-    pipeline_name = os.environ.get('PIPELINE_NAME', 'daily_etl')
-    task_name = os.environ.get('TASK_NAME', 'extract')
-
-    # Config from environment (via Secret Manager UI)
-    batch_size = int(os.environ.get('BATCH_SIZE', '10000'))
+    # Get config from Spark properties (set by the platform)
+    conf = spark.sparkContext.getConf()
+    execution_id = conf.get("spark.workflow.executionId", "local-run")
+    pipeline_name = conf.get("spark.workflow.pipelineName", "daily_etl")
+    task_name = conf.get("spark.workflow.taskName", "extract")
+    environment = conf.get("spark.workflow.environment", "development")
 
     logger.info(f"Configuration:")
-    logger.info(f"  Project ID: {project_id} test")
     logger.info(f"  Dataset: {dataset}")
     logger.info(f"  Source Table: {source_table}")
-    logger.info(f"  Batch Size: {batch_size}")
     logger.info(f"  Execution ID: {execution_id}")
     logger.info(f"  Pipeline: {pipeline_name}")
     logger.info(f"  Task: {task_name}")
+    logger.info(f"  Environment: {environment}")
 
     # Simulate extraction window
     end_time = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -53,34 +50,40 @@ def main(source_table: str = "raw_transactions", dataset: str = "sales_data"):
 
     logger.info(f"Extraction window: {start_time.isoformat()} to {end_time.isoformat()}")
 
-    # Simulate extraction steps
-    logger.info("Step 1: Connecting to source system...")
-    logger.info("Step 2: Querying data for extraction window...")
-    logger.info("Step 3: Transforming records...")
-    logger.info("Step 4: Loading to staging table...")
+    # Create a sample Iceberg table using PySpark
+    logger.info("Step 1: Generating sample data...")
 
-    # Simulate some extracted records
-    demo_records = 1250
+    data = [
+        (1, "2025-01-15", "us-east", "electronics", 142, 28450.00),
+        (2, "2025-01-15", "us-west", "electronics", 98, 19600.00),
+        (3, "2025-01-15", "us-east", "clothing", 215, 10750.00),
+        (4, "2025-01-15", "eu-west", "electronics", 76, 15200.00),
+        (5, "2025-01-15", "eu-west", "clothing", 134, 6700.00),
+    ]
+    columns = ["id", "date", "region", "category", "orders", "revenue"]
+
+    df = spark.createDataFrame(data, columns)
+
+    logger.info("Step 2: Writing to Iceberg table...")
+    df.writeTo(f"sales.{source_table}").createOrReplace()
+
+    row_count = df.count()
+    logger.info(f"Extraction completed: {row_count} records written to sales.{source_table}")
 
     result = {
-        'status': 'success',
-        'records_extracted': demo_records,
-        'records_loaded': demo_records,
-        'duration_seconds': 5.2,
-        'extraction_window': {
-            'start': start_time.isoformat(),
-            'end': end_time.isoformat()
-        },
-        'execution_id': execution_id,
-        'demo_mode': True
+        "status": "success",
+        "records_extracted": row_count,
+        "table": f"sales.{source_table}",
+        "execution_id": execution_id,
     }
-
-    logger.info(f"Extraction completed successfully")
-    logger.info(f"Records extracted: {demo_records}")
 
     print(json.dumps(result, indent=2))
     return result
 
 
 if __name__ == "__main__":
-    main()
+    # For local testing without the platform runner
+    from pyspark.sql import SparkSession
+    spark = SparkSession.builder.appName("extract-local").getOrCreate()
+    main(spark)
+    spark.stop()

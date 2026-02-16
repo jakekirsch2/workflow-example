@@ -2,3 +2,9 @@ python_version: "3.11"
 cpu: "2"
 memory: "4Gi"
 timeout: "45m"
+
+schemas:
+  - sales
+  - analytics
+
+pip_packages: []

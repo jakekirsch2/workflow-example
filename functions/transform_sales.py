@@ -3,11 +3,10 @@
 Transform Sales Function (Demo Stub)
 Demonstrates the transformation step of the ETL pipeline.
 
-Functions receive arguments from the pipeline YAML definition.
-Environment variables are still available for secrets and global config.
+Functions receive a SparkSession as the first argument, followed by
+any additional arguments from the pipeline YAML definition.
 """
 
-import os
 import json
 import logging
 from datetime import datetime
@@ -19,65 +18,77 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def main(input_table: str = "staging_raw_transactions", output_table: str = "transformed_sales"):
+def main(spark):
     """
     Main entry point for the transformation function.
 
     Args:
-        input_table: The staging table to read from
-        output_table: The destination table to write to
+        spark: SparkSession with Iceberg catalog configured
     """
     logger.info("Starting sales transformation (demo mode)")
 
-    # Get system config from environment (set by the platform)
-    project_id = os.environ.get('PROJECT_ID', 'demo-project')
-    execution_id = os.environ.get('EXECUTION_ID', 'local-run')
-    pipeline_name = os.environ.get('PIPELINE_NAME', 'daily_etl')
-    task_name = os.environ.get('TASK_NAME', 'transform')
-
-    # Secrets/credentials still come from environment (via Secret Manager)
-    dataset = os.environ.get('DATASET', 'sales_data')
+    # Get config from Spark properties (set by the platform)
+    conf = spark.sparkContext.getConf()
+    execution_id = conf.get("spark.workflow.executionId", "local-run")
+    pipeline_name = conf.get("spark.workflow.pipelineName", "daily_etl")
+    task_name = conf.get("spark.workflow.taskName", "transform")
+    environment = conf.get("spark.workflow.environment", "development")
 
     logger.info(f"Configuration:")
-    logger.info(f"  Project ID: {project_id}")
-    logger.info(f"  Dataset: {dataset}")
-    logger.info(f"  Input Table: {input_table}")
-    logger.info(f"  Output Table: {output_table}")
     logger.info(f"  Execution ID: {execution_id}")
     logger.info(f"  Pipeline: {pipeline_name}")
     logger.info(f"  Task: {task_name}")
+    logger.info(f"  Environment: {environment}")
 
-    # Simulate transformation steps
-    logger.info("Step 1: Loading data from staging table...")
-    logger.info("Step 2: Calculating tax amounts...")
-    logger.info("Step 3: Categorizing products...")
-    logger.info("Step 4: Computing customer segments...")
-    logger.info("Step 5: Validating output data...")
-    logger.info("Step 6: Saving to destination table...")
+    # Read from the Iceberg table created by the extract step
+    logger.info("Step 1: Reading from sales.raw_transactions...")
+    df = spark.table("sales.raw_transactions")
+    input_count = df.count()
+    logger.info(f"  Read {input_count} records")
 
-    # Simulate some transformed records
-    input_records = 1250
-    output_records = 1248  # 2 records filtered out during validation
+    # Apply transformations using Spark SQL
+    logger.info("Step 2: Applying transformations...")
+    df.createOrReplaceTempView("raw_data")
+
+    transformed = spark.sql("""
+        SELECT
+            region,
+            category AS product_category,
+            SUM(orders) AS total_orders,
+            SUM(revenue) AS total_revenue,
+            ROUND(SUM(revenue) / SUM(orders), 2) AS avg_order_value
+        FROM raw_data
+        GROUP BY region, category
+    """)
+
+    # Write transformed data to Iceberg table
+    logger.info("Step 3: Writing to sales.sales_summary...")
+    transformed.writeTo("sales.sales_summary").createOrReplace()
+
+    output_count = transformed.count()
+    logger.info(f"Transformation completed: {input_count} -> {output_count} records")
+
+    # Compute summary metrics
+    metrics = spark.sql("""
+        SELECT
+            SUM(total_revenue) as total_revenue,
+            SUM(total_orders) as total_orders,
+            COUNT(DISTINCT region) as unique_regions
+        FROM sales.sales_summary
+    """).collect()[0]
 
     result = {
-        'status': 'success',
-        'records_input': input_records,
-        'records_output': output_records,
-        'validation_passed': True,
-        'duration_seconds': 12.8,
-        'metrics': {
-            'total_revenue': 125847.50,
-            'total_tax': 8809.33,
-            'unique_customers': 342,
-            'bulk_orders': 28,
-            'high_value_orders': 15
+        "status": "success",
+        "records_input": input_count,
+        "records_output": output_count,
+        "metrics": {
+            "total_revenue": float(metrics.total_revenue or 0),
+            "total_orders": int(metrics.total_orders or 0),
+            "unique_regions": int(metrics.unique_regions or 0),
         },
-        'execution_id': execution_id,
-        'demo_mode': True
+        "execution_id": execution_id,
     }
 
-    logger.info(f"Transformation completed successfully")
-    logger.info(f"Records processed: {input_records} -> {output_records}")
     logger.info(f"Total revenue: ${result['metrics']['total_revenue']:,.2f}")
 
     print(json.dumps(result, indent=2, default=str))
@@ -85,4 +96,8 @@ def main(input_table: str = "staging_raw_transactions", output_table: str = "tra
 
 
 if __name__ == "__main__":
-    main()
+    # For local testing without the platform runner
+    from pyspark.sql import SparkSession
+    spark = SparkSession.builder.appName("transform-local").getOrCreate()
+    main(spark)
+    spark.stop()

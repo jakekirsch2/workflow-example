@@ -1,26 +1,9 @@
 # Python dependencies for workflow functions
-# These are installed during Docker image build
-
-# Google Cloud SDK
-google-cloud-bigquery>=3.11.0
-google-cloud-storage>=2.10.0
-google-cloud-secret-manager>=2.16.0
-google-cloud-logging>=3.6.0
-google-api-core>=2.11.0
-
-# Data processing
-pandas>=2.0.0
-numpy>=1.24.0
-pyarrow>=12.0.0
+# Packages already provided by Dataproc Serverless (pandas, numpy, pyarrow,
+# google-cloud-*, pyspark) do NOT need to be listed here.
 
 # HTTP client
 requests>=2.31.0
-urllib3>=2.0.0
 
 # Utilities
 python-dateutil>=2.8.2
-pytz>=2023.3
-
-# Testing (optional, for local development)
-pytest>=7.4.0
-pytest-cov>=4.1.0
