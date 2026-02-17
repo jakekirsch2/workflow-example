@@ -1,6 +1,6 @@
 # Workflow Example Repository
 
-This is a template repository for the Serverless Workflow Orchestration Platform. Define your data pipelines in YAML, write Python functions, and let the platform handle deployment and execution.
+This is a template repository for the Serverless Workflow Orchestration Platform. Define your data pipelines in YAML, write Python functions, and let the platform handle deployment and execution on Dataproc Serverless.
 
 ## Quick Start
 
@@ -12,11 +12,10 @@ cd {my-repo-name}
 git remote set-url origin https://github.com/{my-username}/{my-repo-name}.git
 git push -u origin main
 ```
-Create repo in GitHub
 
 ### 2. Connect to the platform
 
-- Go to https://workflow-orchestrator-frontend-gstxypf3sq-uc.a.run.app/
+- Go to the platform dashboard
 - Sign in with GitHub
 - Connect your cloned repository
 - The platform will automatically deploy your pipelines
@@ -40,13 +39,12 @@ The platform automatically deploys to different environments based on your branc
 | `main` or `master` | Production |
 | `dev` or `develop` | Development |
 
-This allows you to test changes in development before promoting to production.
-
 ## Repository Structure
 
 ```
 workflow-example/
-├── config.yaml                # Repo-level config (Python version, resources)
+├── config.yaml                # Repo-level config (Python version, schemas)
+├── dev.py                     # Local development CLI
 ├── pipelines/                 # Pipeline definitions (YAML)
 │   └── daily_etl.yaml         # Example ETL pipeline
 ├── functions/                 # Python functions
@@ -58,25 +56,27 @@ workflow-example/
 
 ## Repository Configuration
 
-The `config.yaml` file in your repo root defines the Python version and resource limits for your runner job. All tasks in the repo share these settings.
+The `config.yaml` file defines the Python version, Iceberg schemas, and pip packages for your repository.
 
 ```yaml
 python_version: "3.11"
-cpu: "2"
-memory: "4Gi"
-timeout: "45m"
+
+schemas:
+  - sales
+  - analytics
+
+pip_packages: []
 ```
 
 ### Config Fields
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `python_version` | `"3.11"` | Python version for the Docker image (e.g. `"3.11"`, `"3.12"`) |
-| `cpu` | `"1"` | vCPU allocation (`"0.5"`, `"1"`, `"2"`, etc.) |
-| `memory` | `"2Gi"` | Memory allocation (`"512Mi"`, `"2Gi"`, `"4Gi"`, etc.) |
-| `timeout` | `"30m"` | Max execution time per task (`"30m"`, `"3600s"`, `"1h"`) |
+| `python_version` | `"3.11"` | Python version (e.g. `"3.11"`, `"3.12"`) |
+| `schemas` | `[]` | Iceberg namespace names for your lakehouse tables |
+| `pip_packages` | `[]` | Additional Python packages to install |
 
-If `config.yaml` is missing, defaults are used.
+Compute resources are managed automatically by Dataproc Serverless — no CPU/memory configuration needed.
 
 ## Pipeline Definition
 
@@ -126,113 +126,92 @@ tasks:
 
 ## Writing Python Functions
 
-Your function's entrypoint receives the `args` from the pipeline definition as positional arguments:
+Functions receive a SparkSession as the first argument, followed by any `args` from the pipeline definition:
 
 ```python
 # functions/extract_data.py
 
-def main(source_table: str, dataset: str):
+def main(spark, source_table: str, dataset: str):
     """
     Called with args from pipeline:
       args:
         - "raw_transactions"   -> source_table
         - "sales_data"         -> dataset
     """
-    print(f"Extracting from {source_table} to {dataset}")
-
-    # Your extraction logic here
-
-    return {
-        "status": "success",
-        "records_extracted": 1250
-    }
+    # Write to an Iceberg table
+    df = spark.createDataFrame([...], columns=[...])
+    df.writeTo(f"sales.{source_table}").createOrReplace()
 ```
-
-The platform calls your function like: `main("raw_transactions", "sales_data")`
 
 ## Environment Variables
 
-You can configure environment variables for your pipelines in the platform UI:
+Configure environment variables in the platform UI:
 
 1. Go to **Settings** > **Environment Variables**
-2. Select your repository
-3. Choose the environment (Production or Development)
-4. Add your variables (e.g., `API_KEY`, `DATABASE_URL`)
+2. Select your repository and environment
+3. Add your variables (e.g., `API_KEY`, `DATABASE_URL`)
 
-These variables are securely stored and injected into your functions at runtime. Access them in your code:
+Variables are securely stored and injected into your functions at runtime via `os.environ`:
 
 ```python
 import os
 
-def main():
+def main(spark):
     api_key = os.environ.get("API_KEY")
     database_url = os.environ.get("DATABASE_URL")
 ```
 
-### System Variables
-
-The platform automatically provides these variables:
-
-| Variable | Description |
-|----------|-------------|
-| `PIPELINE_NAME` | Current pipeline name |
-| `TASK_NAME` | Current task name |
-| `EXECUTION_ID` | Unique execution ID |
-| `ENVIRONMENT` | `production` or `development` |
-
 ## Local Development
 
-### Prerequisites
+The `dev.py` CLI lets you run functions, query data, and browse tables from your local machine. All execution happens on Dataproc Serverless via the platform API — you just need Python and the `requests` library.
 
-- Python 3.11+
-- pyenv (recommended for managing Python versions)
-
-### Setup with pyenv
+### Setup
 
 ```bash
-# Install pyenv (macOS)
-brew install pyenv
-
-# Install Python 3.11
-pyenv install 3.11
-
-# Set local Python version
-cd workflow-example
-pyenv local 3.11
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r functions/requirements.txt
+pip install requests
 ```
 
-### Testing Functions Locally
+1. Go to **Settings** > **API Keys** and generate a new key
+2. Go to **Settings** > **Environment Variables**, select your repo, and click **Download .env.development**
+3. Paste your API key into `.env.development`:
 
-Test your functions before deploying:
+```
+WORKFLOW_API_URL=https://your-platform.example.com
+WORKFLOW_API_KEY=wf_your_actual_key_here
+WORKFLOW_REPO_ID=abc123
+WORKFLOW_ENVIRONMENT=development
+```
+
+### Commands
 
 ```bash
-# Activate virtual environment
-source venv/bin/activate
+# Run a function against real data (submitted to Dataproc via API)
+python dev.py run functions/extract_data.py raw_transactions sales_data
 
-# Test with arguments matching your pipeline definition
-python -c "from functions.extract_data import main; main('raw_transactions', 'sales_data')"
+# Run against production data
+python dev.py run functions/extract_data.py --env production
 
-# Or run the file directly if it has a __main__ block
-python functions/extract_data.py
+# Query data
+python dev.py query "SELECT * FROM sales.raw_transactions LIMIT 10"
+
+# Cross-schema queries work naturally
+python dev.py query "SELECT * FROM sales.raw_transactions JOIN analytics.metrics USING (id)"
+
+# List schemas and tables
+python dev.py tables
+
+# Show environment variables
+python dev.py env
+
+# Interactive SQL REPL
+python dev.py shell
 ```
 
-### Adding Dependencies
+### How it works
 
-Add any Python packages your functions need to `functions/requirements.txt`:
-
-```
-requests>=2.28.0
-pandas>=2.0.0
-```
-
-The platform will install these when building your container.
+- `dev.py run` reads your local Python file and sends it to the platform API, which runs it on Dataproc Serverless with the same Iceberg catalog and environment variables as production pipelines.
+- `dev.py query` and `dev.py shell` execute Spark SQL queries via the API. Tables are referenced as `schema.table` (e.g., `sales.raw_transactions`).
+- No GCP SDK, no `gcloud`, no Spark installation needed locally. Everything goes through the API.
 
 ## Platform Features
 
@@ -240,10 +219,7 @@ The platform will install these when building your container.
 - **Scheduling**: Run pipelines on a cron schedule
 - **Manual triggers**: Run pipelines on-demand from the dashboard
 - **Real-time logs**: View execution logs as they happen
-- **Cost tracking**: Monitor usage and costs per execution
-- **Environment variables**: Securely store secrets in the UI
-
-## Support
-
-- Platform: https://workflow-orchestrator-frontend-gstxypf3sq-uc.a.run.app/
-- Issues: https://github.com/jakekirsch2/workflow-example/issues
+- **Cost tracking**: Monitor Dataproc usage and costs per execution
+- **Environment variables**: Securely store and inject secrets
+- **Local dev CLI**: Test functions and query data without deploying
+- **Iceberg lakehouse**: Tables stored in GCS with full schema evolution support

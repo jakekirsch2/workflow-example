@@ -82,8 +82,6 @@ def main(spark, source_table: str = "raw_transactions", dataset: str = "sales_da
 
 
 if __name__ == "__main__":
-    # For local testing without the platform runner
-    from pyspark.sql import SparkSession
-    spark = SparkSession.builder.appName("extract-local").getOrCreate()
-    main(spark)
-    spark.stop()
+    # Use dev.py for local testing:
+    #   python dev.py run functions/extract_data.py raw_transactions sales_data
+    print("Use 'python dev.py run functions/extract_data.py raw_transactions sales_data' for local testing")
