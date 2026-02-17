@@ -96,8 +96,6 @@ def main(spark):
 
 
 if __name__ == "__main__":
-    # For local testing without the platform runner
-    from pyspark.sql import SparkSession
-    spark = SparkSession.builder.appName("transform-local").getOrCreate()
-    main(spark)
-    spark.stop()
+    # Use dev.py for local testing:
+    #   python dev.py run functions/transform_sales.py
+    print("Use 'python dev.py run functions/transform_sales.py' for local testing")
