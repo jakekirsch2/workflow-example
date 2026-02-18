@@ -26,6 +26,6 @@ tasks:
     type: python
     function: functions/visualize_sales.py
     entrypoint: main
-    vizId: sales-dashboard
+    vizId: sales-dashboard-new
     depends_on:
       - transform
