@@ -20,3 +20,12 @@ tasks:
     args: []
     depends_on:
       - extract
+
+  - name: visualize
+    description: "Publish revenue chart to a shareable public URL"
+    type: python
+    function: functions/visualize_sales.py
+    entrypoint: main
+    vizId: sales-dashboard
+    depends_on:
+      - transform
