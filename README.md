@@ -50,6 +50,7 @@ workflow-example/
 ├── functions/                 # Python functions
 │   ├── extract_data.py        # Data extraction
 │   ├── transform_sales.py     # Data transformation
+│   ├── visualize_sales.py     # Publishes a shareable dashboard
 │   └── requirements.txt       # Python dependencies
 └── README.md
 ```
@@ -123,6 +124,7 @@ tasks:
 | `entrypoint` | Function to call (default: `main`) |
 | `args` | Arguments passed to the function (as positional args) |
 | `depends_on` | List of tasks that must complete first |
+| `vizId` | Publish the function's return value as a shareable visualization (optional) |
 
 ## Writing Python Functions
 
@@ -142,6 +144,83 @@ def main(spark, source_table: str, dataset: str):
     df = spark.createDataFrame([...], columns=[...])
     df.writeTo(f"sales.{source_table}").createOrReplace()
 ```
+
+## Visualizations
+
+Any task can publish a shareable chart or dashboard by adding `vizId` to its pipeline definition and returning a viz spec from the function.
+
+```yaml
+# pipelines/daily_etl.yaml
+tasks:
+  - name: visualize
+    type: python
+    function: functions/visualize_sales.py
+    vizId: sales-dashboard        # <-- enables publishing
+    depends_on:
+      - transform
+```
+
+The `vizId` becomes the public URL slug: `/v/{repoId}/{env}/sales-dashboard`.
+
+### Single chart
+
+Return a dict with a `type` field and the platform publishes one chart:
+
+```python
+def main(spark):
+    data = [{"month": r.month, "revenue": r.revenue} for r in df.collect()]
+    return {
+        "type": "bar",
+        "title": "Monthly Revenue",
+        "data": data,
+        "xKey": "month",
+        "series": [{"key": "revenue", "label": "Revenue ($)", "color": "#3b82f6"}],
+    }
+```
+
+### Dashboard (multiple charts)
+
+Return a list and the platform publishes all charts together on one page:
+
+```python
+def main(spark):
+    ...
+    return [
+        {
+            "type": "metric",
+            "title": "Total Revenue",
+            "value": total_revenue,
+            "unit": "USD",
+        },
+        {
+            "type": "bar",
+            "title": "Revenue by Region",
+            "data": chart_data,
+            "xKey": "region",
+            "series": [{"key": "revenue", "label": "Revenue ($)", "color": "#3b82f6"}],
+        },
+        {
+            "type": "table",
+            "title": "Region Breakdown",
+            "columns": ["region", "revenue", "orders"],
+            "data": chart_data,
+        },
+    ]
+```
+
+### Supported chart types
+
+| Type | Description | Required fields |
+|------|-------------|-----------------|
+| `bar` | Bar chart | `data`, `xKey`, `series` |
+| `line` | Line chart | `data`, `xKey`, `series` |
+| `pie` | Pie chart | `data`, `xKey`, `series` |
+| `table` | Data table | `data`, `columns` (optional) |
+| `metric` | Single number | `value`, `unit` (optional), `label` (optional) |
+
+All chart types support an optional `title` and `subtitle` field.
+
+Visualizations auto-refresh every minute and require no login to view.
 
 ## Environment Variables
 
@@ -217,9 +296,10 @@ python dev.py shell
 
 - **Auto-deploy**: Push to GitHub and pipelines are automatically redeployed
 - **Scheduling**: Run pipelines on a cron schedule
-- **Manual triggers**: Run pipelines on-demand from the dashboard
+- **Manual triggers**: Run pipelines on-demand from the dashboard, or run a single task in isolation
 - **Real-time logs**: View execution logs as they happen
 - **Cost tracking**: Monitor Dataproc usage and costs per execution
 - **Environment variables**: Securely store and inject secrets
 - **Local dev CLI**: Test functions and query data without deploying
 - **Iceberg lakehouse**: Tables stored in GCS with full schema evolution support
+- **Visualizations**: Publish shareable charts and dashboards from any task — no login required to view
