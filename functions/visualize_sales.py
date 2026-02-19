@@ -32,7 +32,7 @@ def main(spark):
         SELECT
             region,
             SUM(total_revenue)  AS revenue,
-            SUM(total_orders)  AS orders
+            SUM(total_orders)   AS orders
         FROM sales.sales_summary
         GROUP BY region
         ORDER BY revenue DESC
