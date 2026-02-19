@@ -4,4 +4,4 @@ schemas:
   - sales
   - analytics
 
-pip_packages: ["nltk"]
+pip_packages: ["matplotlib", "nltk"]
