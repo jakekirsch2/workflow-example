@@ -241,7 +241,7 @@ def main(spark):
 
 ## Local Development
 
-The `dev.py` CLI lets you run functions, query data, and browse tables from your local machine. All execution happens on Dataproc Serverless via the platform API — you just need Python and the `requests` library.
+The `dev.py` CLI lets you run functions against real data from your local machine. All execution happens on the platform via the API — you just need Python and the `requests` library.
 
 ### Setup
 
@@ -251,7 +251,7 @@ pip install requests
 
 1. Go to **Settings** > **API Keys** and generate a new key
 2. Go to **Settings** > **Environment Variables**, select your repo, and click **Download .env.development**
-3. Paste your API key into `.env.development`:
+3. Open `.env.development` and paste your API key:
 
 ```
 WORKFLOW_API_URL=https://your-platform.example.com
@@ -260,36 +260,39 @@ WORKFLOW_REPO_ID=abc123
 WORKFLOW_ENVIRONMENT=development
 ```
 
-### Commands
+### Running a function
 
 ```bash
-# Run a function against real data (submitted to Dataproc via API)
+# Run a function against development data
 python dev.py run functions/extract_data.py raw_transactions sales_data
 
 # Run against production data
-python dev.py run functions/extract_data.py --env production
+python dev.py run functions/transform_sales.py --env production
 
-# Query data
-python dev.py query "SELECT * FROM sales.raw_transactions LIMIT 10"
+# Use a different entrypoint
+python dev.py run functions/extract_data.py --entrypoint run_incremental
+```
 
-# Cross-schema queries work naturally
-python dev.py query "SELECT * FROM sales.raw_transactions JOIN analytics.metrics USING (id)"
+Output streams as the job runs and prints logs on completion:
 
-# List schemas and tables
-python dev.py tables
+```
+Submitting functions/extract_data.py (development)...
+Running... 10s
+Running... 20s
+Running... 80s
 
-# Show environment variables
-python dev.py env
+── Logs ──
+INFO Loaded 1,240 rows from source
+INFO Wrote to sales.raw_transactions
 
-# Interactive SQL REPL
-python dev.py shell
+[✓] Success in 83s
 ```
 
 ### How it works
 
-- `dev.py run` reads your local Python file and sends it to the platform API, which runs it on Dataproc Serverless with the same Iceberg catalog and environment variables as production pipelines.
-- `dev.py query` and `dev.py shell` execute Spark SQL queries via the API. Tables are referenced as `schema.table` (e.g., `sales.raw_transactions`).
-- No GCP SDK, no `gcloud`, no Spark installation needed locally. Everything goes through the API.
+`dev.py run` reads your local Python file and submits it to the platform API, which runs it with the same Iceberg catalog and environment variables as production pipelines. The CLI polls for status every 10 seconds and prints logs when the job completes.
+
+No GCP SDK, no `gcloud`, no Spark installation needed locally. Everything goes through the API.
 
 ## Platform Features
 
