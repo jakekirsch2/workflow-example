@@ -4,4 +4,4 @@ schemas:
   - sales
   - analytics
 #most pip_packages are already included in the base image, test before adding
-pip_packages: ["ntlx"]
+pip_packages: ["ntlx", "matplotlib"]
