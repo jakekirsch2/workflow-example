@@ -1,9 +1,0 @@
-# Python dependencies for workflow functions
-# Packages already provided by Dataproc Serverless (pandas, numpy, pyarrow,
-# google-cloud-*, pyspark) do NOT need to be listed here.
-
-# HTTP client
-requests>=2.31.0
-
-# Utilities
-python-dateutil>=2.8.2

@@ -50,8 +50,7 @@ workflow-example/
 ├── functions/                 # Python functions
 │   ├── extract_data.py        # Data extraction
 │   ├── transform_sales.py     # Data transformation
-│   ├── visualize_sales.py     # Publishes a shareable dashboard
-│   └── requirements.txt       # Python dependencies
+│   └── visualize_sales.py     # Publishes a shareable dashboard
 └── README.md
 ```
 
@@ -75,7 +74,7 @@ pip_packages: []
 |-------|---------|-------------|
 | `python_version` | `"3.11"` | Python version (e.g. `"3.11"`, `"3.12"`) |
 | `schemas` | `[]` | Iceberg namespace names for your lakehouse tables |
-| `pip_packages` | `[]` | Additional Python packages to install |
+| `pip_packages` | `[]` | Additional PyPI packages to install (e.g. `["pandas==2.2.0", "httpx"]`) |
 
 Compute resources are managed automatically by Dataproc Serverless — no CPU/memory configuration needed.
 
