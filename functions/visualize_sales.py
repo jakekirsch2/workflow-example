@@ -73,7 +73,7 @@ def main(spark):
         {
             "type": "bar",
             "title": "Revenue by Region",
-            "subtitle": f"As of {today} UTC",
+            "subtitle": f"As of {today} UTC time",
             "data": chart_data,
             "xKey": "region",
             "series": [

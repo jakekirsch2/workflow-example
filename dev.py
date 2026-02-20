@@ -2,8 +2,8 @@
 """
 Workflow Platform - Local Development CLI
 
-Run functions, query data, and manage env vars via the platform API.
-Only requires Python 3.7+ and the `requests` library.
+Run functions against real data via the platform API.
+Requires Python 3.7+ and the `requests` library.
 
 Setup:
   1. Generate an API key in Settings > API Keys
@@ -12,16 +12,11 @@ Setup:
 
 Usage:
   python dev.py run functions/extract_data.py raw_transactions sales_data
-  python dev.py run functions/extract_data.py --env production
-  python dev.py query "SELECT * FROM sales.raw_transactions LIMIT 10"
-  python dev.py tables
-  python dev.py env
-  python dev.py shell
+  python dev.py run functions/transform_sales.py --env production
 """
 
 import sys
 import os
-import json
 import time
 import argparse
 
@@ -46,7 +41,6 @@ def load_env(env_file):
                 key, _, value = line.partition("=")
                 key = key.strip()
                 value = value.strip()
-                # Strip surrounding quotes
                 if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
                     value = value[1:-1]
                 env[key] = value
@@ -56,14 +50,14 @@ def load_env(env_file):
 def get_config(args):
     """Load config from .env file based on environment."""
     environment = getattr(args, "env", None) or "development"
-    env_file = f".env.{environment}"
 
-    # Fall back to .env if specific file doesn't exist
-    if not os.path.exists(env_file):
-        env_file = ".env"
+    # Accept both dotfile and non-dotfile names — browsers sometimes strip the
+    # leading dot when downloading (e.g. .env.development → env.development).
+    candidates = [f".env.{environment}", f"env.{environment}", ".env"]
+    env_file = next((f for f in candidates if os.path.exists(f)), None)
 
-    if not os.path.exists(env_file):
-        print(f"Error: No config file found. Expected {env_file}")
+    if not env_file:
+        print(f"Error: No config file found. Expected .env.{environment}")
         print("Download one from Settings > Environment Variables > Download .env")
         sys.exit(1)
 
@@ -90,7 +84,7 @@ def get_config(args):
     }
 
 
-def api_request(config, method, path, body=None):
+def api_request(config, method, path, body=None, timeout=30):
     """Make an authenticated API request."""
     url = f"{config['api_url']}{path}"
     headers = {
@@ -99,7 +93,7 @@ def api_request(config, method, path, body=None):
     }
 
     try:
-        resp = requests.request(method, url, headers=headers, json=body, timeout=600)
+        resp = requests.request(method, url, headers=headers, json=body, timeout=timeout)
     except requests.ConnectionError:
         print(f"Error: Could not connect to {config['api_url']}")
         sys.exit(1)
@@ -119,38 +113,10 @@ def api_request(config, method, path, body=None):
     return resp.json()
 
 
-def format_table(columns, rows, max_width=40):
-    """Format data as a text table."""
-    if not rows:
-        print("(no rows)")
-        return
-
-    # Calculate column widths
-    widths = {col: len(col) for col in columns}
-    for row in rows:
-        for col in columns:
-            val = str(row.get(col, ""))
-            widths[col] = min(max(widths[col], len(val)), max_width)
-
-    # Header
-    header = " | ".join(col.ljust(widths[col])[:widths[col]] for col in columns)
-    separator = "-+-".join("-" * widths[col] for col in columns)
-    print(header)
-    print(separator)
-
-    # Rows
-    for row in rows:
-        line = " | ".join(
-            str(row.get(col, "")).ljust(widths[col])[:widths[col]]
-            for col in columns
-        )
-        print(line)
-
-
 # ── Commands ────────────────────────────────────────────────────────
 
 def cmd_run(args):
-    """Run a function on Dataproc via the API."""
+    """Submit a function and poll every 10 seconds until complete."""
     config = get_config(args)
 
     file_path = args.file
@@ -161,154 +127,45 @@ def cmd_run(args):
     with open(file_path) as f:
         function_code = f.read()
 
-    print(f"Submitting {file_path} to Dataproc ({config['environment']})...")
-    print()
-
-    result = api_request(config, "POST", f"/api/repos/{config['repo_id']}/dev/run", {
-        "functionCode": function_code,
-        "entrypoint": args.entrypoint or "main",
-        "args": args.args or [],
-        "environment": config["environment"],
-    })
-
-    # Print logs
-    if result.get("logs"):
-        print("── Logs ──")
-        print(result["logs"])
-        print()
-
-    # Print status
-    status = result.get("status", "unknown")
-    duration = result.get("duration", "?")
-    icon = "OK" if status == "success" else "FAIL"
-    print(f"[{icon}] Status: {status} | Duration: {duration}")
-
-
-def cmd_query(args):
-    """Execute a SQL query."""
-    config = get_config(args)
-    sql = args.sql
-
-    print(f"Running query ({config['environment']})...")
-    start = time.time()
-
-    result = api_request(config, "POST", f"/api/repos/{config['repo_id']}/database/query", {
-        "sql": sql,
-        "environment": config["environment"],
-        "maxRows": 5000,
-    })
-
-    elapsed = time.time() - start
-
-    if result.get("columns") and result.get("rows"):
-        format_table(result["columns"], result["rows"])
-        print()
-        print(f"{result.get('totalRows', len(result['rows']))} rows | {result.get('duration', '?')}ms (Spark) | {elapsed:.1f}s (total)")
-    else:
-        print("Query returned no results.")
-
-
-def cmd_tables(args):
-    """List schemas and tables."""
-    config = get_config(args)
-
-    schemas_data = api_request(config, "GET", f"/api/repos/{config['repo_id']}/database/schemas")
-    schemas = schemas_data.get("schemas", [])
-
-    if not schemas:
-        print("No schemas defined. Add a 'schemas' list to config.yaml.")
-        return
-
-    env = config["environment"]
-
-    for schema in schemas:
-        tables_data = api_request(
-            config, "GET",
-            f"/api/repos/{config['repo_id']}/database/schemas/{schema}/tables?env={env}"
-        )
-        tables = tables_data.get("tables", [])
-
-        print(f"{schema}/")
-        if tables:
-            for i, table in enumerate(tables):
-                prefix = "  └── " if i == len(tables) - 1 else "  ├── "
-                row_count = table.get("rowCount", "0")
-                print(f"{prefix}{table['id']} ({row_count} rows)")
-        else:
-            print("  (no tables)")
-
-
-def cmd_env(args):
-    """Show environment variables."""
-    config = get_config(args)
+    print(f"Submitting {file_path} ({config['environment']})...")
 
     result = api_request(
-        config, "GET",
-        f"/api/repos/{config['repo_id']}/env/{config['environment']}"
+        config, "POST",
+        f"/api/repos/{config['repo_id']}/dev/run",
+        {
+            "functionCode": function_code,
+            "entrypoint": args.entrypoint or "main",
+            "args": args.args or [],
+            "environment": config["environment"],
+        },
+        timeout=60,
     )
 
-    variables = result.get("variables", {})
-    if not variables:
-        print(f"No environment variables defined for {config['environment']}.")
-        return
-
-    print(f"Environment variables ({config['environment']}):")
-    print()
-    for key, data in variables.items():
-        value = data.get("value", "****") if isinstance(data, dict) else str(data)
-        print(f"  {key} = {value}")
-
-
-def cmd_shell(args):
-    """Interactive SQL REPL."""
-    config = get_config(args)
-
-    print(f"Workflow SQL Shell ({config['environment']})")
-    print("Type SQL queries, or 'exit' to quit. Queries may take 30-60s to start.")
-    print()
+    run_id = result["runId"]
+    start = time.time()
 
     while True:
-        try:
-            sql = input("sql> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
+        time.sleep(10)
+        elapsed = int(time.time() - start)
 
-        if not sql:
+        poll = api_request(config, "GET", f"/api/repos/{config['repo_id']}/dev/run/{run_id}")
+
+        if poll.get("status") == "running":
+            print(f"Running... {elapsed}s")
             continue
-        if sql.lower() in ("exit", "quit", "\\q"):
-            break
 
-        # Collect multi-line input if the line ends with a backslash
-        while sql.endswith("\\"):
-            try:
-                sql = sql[:-1] + "\n" + input("  -> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                break
-
-        print(f"Running...")
-        start = time.time()
-
-        try:
-            result = api_request(config, "POST", f"/api/repos/{config['repo_id']}/database/query", {
-                "sql": sql,
-                "environment": config["environment"],
-                "maxRows": 5000,
-            })
-
-            elapsed = time.time() - start
-
-            if result.get("columns") and result.get("rows"):
-                print()
-                format_table(result["columns"], result["rows"])
-                print(f"\n{result.get('totalRows', len(result['rows']))} rows | {result.get('duration', '?')}ms (Spark) | {elapsed:.1f}s (total)\n")
-            else:
-                print("Query returned no results.\n")
-        except SystemExit:
-            # api_request calls sys.exit on error; catch it in shell mode
+        # Complete
+        print()
+        if poll.get("logs"):
+            print("── Logs ──")
+            print(poll["logs"])
             print()
-            continue
+
+        final_status = poll.get("status", "unknown")
+        duration = poll.get("duration", f"{elapsed}s")
+        icon = "✓" if final_status == "success" else "✗"
+        print(f"[{icon}] {final_status.title()} in {duration}")
+        break
 
 
 # ── Main ────────────────────────────────────────────────────────────
@@ -322,24 +179,10 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
-    # run
-    run_parser = subparsers.add_parser("run", help="Run a function on Dataproc")
+    run_parser = subparsers.add_parser("run", help="Run a function")
     run_parser.add_argument("file", help="Path to Python file")
     run_parser.add_argument("args", nargs="*", help="Arguments to pass to the function")
     run_parser.add_argument("--entrypoint", default="main", help="Function name to call (default: main)")
-
-    # query
-    query_parser = subparsers.add_parser("query", help="Execute a SQL query")
-    query_parser.add_argument("sql", help="SQL query string")
-
-    # tables
-    subparsers.add_parser("tables", help="List schemas and tables")
-
-    # env
-    subparsers.add_parser("env", help="Show environment variables")
-
-    # shell
-    subparsers.add_parser("shell", help="Interactive SQL REPL")
 
     args = parser.parse_args()
 
@@ -347,15 +190,7 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    commands = {
-        "run": cmd_run,
-        "query": cmd_query,
-        "tables": cmd_tables,
-        "env": cmd_env,
-        "shell": cmd_shell,
-    }
-
-    commands[args.command](args)
+    cmd_run(args)
 
 
 if __name__ == "__main__":
