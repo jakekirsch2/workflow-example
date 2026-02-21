@@ -4,4 +4,4 @@ schemas:
   - sales
   - analytics
 #most common pip_packages are already included in the base image, test before adding
-pip_packages: ["matplotlib", "yfinance"]
+pip_packages: ["matplotlib", "yfinance", "pandas-datareader"]
