@@ -2,12 +2,9 @@
 """
 fetch_stock_movers.py
 
-Downloads last-trading-day stock data from Stooq (via pandas_datareader),
+Downloads last-trading-day stock data from Yahoo Finance (via yfinance),
 computes % change (close vs prior close), and writes the top movers
 to analytics.stock_movers.
-
-Stooq is a free data source that pandas_datareader supports natively and
-does not require authentication or API keys.
 """
 
 import logging
@@ -32,19 +29,6 @@ TICKERS = [
 ]
 
 
-def _fetch_ticker(ticker: str, start: str, end: str):
-    """Fetch OHLCV for a single ticker from Stooq. Returns a DataFrame or None."""
-    try:
-        import pandas_datareader.data as web
-        df = web.DataReader(ticker, "stooq", start=start, end=end)
-        if df is not None and not df.empty:
-            df = df.sort_index(ascending=True)  # Stooq returns descending
-            return df
-    except Exception as e:
-        logger.warning(f"  [{ticker}] failed: {e}")
-    return None
-
-
 def main(spark, top_n: str = "25"):
     """
     Fetch last-trading-day stock data and write top movers to analytics.stock_movers.
@@ -53,6 +37,7 @@ def main(spark, top_n: str = "25"):
         spark:  SparkSession (injected by platform)
         top_n:  Number of top movers to surface (default 25)
     """
+    import yfinance as yf
     import pandas as pd
 
     top_n = int(top_n)
@@ -66,37 +51,72 @@ def main(spark, top_n: str = "25"):
     logger.info(f"Top-N movers : {top_n}")
 
     today = date.today()
-    start_str = (today - timedelta(days=7)).strftime("%Y-%m-%d")
+    start_str = (today - timedelta(days=10)).strftime("%Y-%m-%d")
     end_str   = today.strftime("%Y-%m-%d")
     logger.info(f"Download window: {start_str} → {end_str}")
 
-    # ── 1. Fetch each ticker ─────────────────────────────────────────────────
+    # ── 1. Bulk-fetch all tickers at once (much faster than one-by-one) ──────
+    logger.info(f"Fetching {len(TICKERS)} tickers from Yahoo Finance …")
+    raw = yf.download(
+        tickers=TICKERS,
+        start=start_str,
+        end=end_str,
+        auto_adjust=True,
+        progress=False,
+        threads=True,
+    )
+
+    if raw.empty:
+        raise ValueError("yfinance returned no data. Market may be closed or network unavailable.")
+
+    # yfinance bulk download returns a MultiIndex DataFrame: (field, ticker)
+    close_df = raw["Close"] if "Close" in raw.columns else raw.xs("Close", axis=1, level=0)
+    volume_df = raw["Volume"] if "Volume" in raw.columns else raw.xs("Volume", axis=1, level=0)
+
+    # Drop dates where ALL tickers are NaN (non-trading days)
+    close_df = close_df.dropna(how="all")
+    volume_df = volume_df.dropna(how="all")
+
+    if len(close_df) < 2:
+        raise ValueError(f"Not enough trading days in window (got {len(close_df)}). Try widening the date range.")
+
+    last_date = close_df.index[-1]
+    prev_date = close_df.index[-2]
+    trading_date_str = str(last_date.date())
+    prev_date_str    = str(prev_date.date())
+    logger.info(f"Using trading dates: prev={prev_date_str}, last={trading_date_str}")
+
+    # ── 2. Compute % change for each ticker ──────────────────────────────────
     records = []
     success, fail = 0, 0
 
     for ticker in TICKERS:
-        df = _fetch_ticker(ticker, start_str, end_str)
-        if df is None or len(df) < 2:
-            logger.warning(f"  [{ticker}] skipped (insufficient rows: {len(df) if df is not None else 0})")
+        if ticker not in close_df.columns:
+            logger.warning(f"  [{ticker}] not in response — skipped")
             fail += 1
             continue
 
-        prev_close = float(df["Close"].iloc[-2])
-        last_close = float(df["Close"].iloc[-1])
-        trading_date = str(df.index[-1].date())
-        prev_date    = str(df.index[-2].date())
+        prev_close = close_df.loc[prev_date, ticker]
+        last_close = close_df.loc[last_date, ticker]
 
-        if prev_close == 0:
+        if pd.isna(prev_close) or pd.isna(last_close) or prev_close == 0:
+            logger.warning(f"  [{ticker}] invalid close prices — skipped")
             fail += 1
             continue
 
+        prev_close = float(prev_close)
+        last_close = float(last_close)
         pct = (last_close - prev_close) / prev_close * 100
-        vol = int(df["Volume"].iloc[-1]) if "Volume" in df.columns and not pd.isna(df["Volume"].iloc[-1]) else None
+
+        vol = None
+        if ticker in volume_df.columns:
+            v = volume_df.loc[last_date, ticker]
+            vol = int(v) if not pd.isna(v) else None
 
         records.append({
             "ticker":         ticker,
-            "trading_date":   trading_date,
-            "prev_date":      prev_date,
+            "trading_date":   trading_date_str,
+            "prev_date":      prev_date_str,
             "prev_close":     round(prev_close, 4),
             "last_close":     round(last_close, 4),
             "pct_change":     round(pct, 4),
@@ -112,7 +132,7 @@ def main(spark, top_n: str = "25"):
     if not records:
         raise ValueError("No stock data could be fetched. Network may be unavailable.")
 
-    # ── 2. Sort and rank ─────────────────────────────────────────────────────
+    # ── 3. Sort and rank ─────────────────────────────────────────────────────
     pdf = (
         pd.DataFrame(records)
         .sort_values("abs_pct_change", ascending=False)
@@ -129,7 +149,7 @@ def main(spark, top_n: str = "25"):
             f"   close={float(row['last_close']):.2f}"
         )
 
-    # ── 3. Write to Iceberg ──────────────────────────────────────────────────
+    # ── 4. Write to Iceberg ──────────────────────────────────────────────────
     schema_cols = [
         "rank", "ticker", "trading_date", "prev_date", "prev_close", "last_close",
         "pct_change", "abs_pct_change", "direction", "volume", "ingested_at",
