@@ -1,0 +1,19 @@
+name: stock-movers
+description: "Downloads last trading day stock data from Yahoo Finance and surfaces the largest movers by % change"
+schedule: "0 21 * * 1-5"  # Weekdays at 9 PM UTC (~4 PM ET market close + buffer)
+
+tasks:
+  - name: fetch
+    type: python
+    function: functions/fetch_stock_movers.py
+    entrypoint: main
+    args:
+      - "25"   # top_n: number of movers to keep
+
+  - name: visualize
+    type: python
+    function: functions/visualize_stock_movers.py
+    entrypoint: main
+    vizId: stock-movers-dashboard
+    depends_on:
+      - fetch
