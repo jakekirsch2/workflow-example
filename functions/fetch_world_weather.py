@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
 fetch_world_weather.py
-Pulls current weather conditions for a set of major world cities from the
-Open-Meteo public API (no API key required) and writes the results to
-analytics.world_weather as an Iceberg table.
+Pulls recent weather conditions for 20 major world cities from the
+NOAA GSOD BigQuery public dataset (no outbound HTTP required) and writes
+the results to analytics.world_weather as an Iceberg table.
+
+Station IDs sourced from bigquery-public-data.noaa_gsod.stations.
+Data is pulled from the most recent available date across all stations.
 """
 
 import logging
-import requests
-from datetime import date
+from pyspark.sql import functions as F
 from pyspark.sql.types import (
     StructType, StructField, StringType, FloatType, IntegerType, DateType
 )
@@ -19,120 +21,176 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── City catalogue ────────────────────────────────────────────────────────────
+# ── City → NOAA GSOD station mapping ─────────────────────────────────────────
+# usaf / wban uniquely identify each station in bigquery-public-data.noaa_gsod
 CITIES = [
-    {"city": "New York",     "country": "US",  "lat": 40.71,  "lon": -74.01},
-    {"city": "London",       "country": "GB",  "lat": 51.51,  "lon": -0.13},
-    {"city": "Tokyo",        "country": "JP",  "lat": 35.69,  "lon": 139.69},
-    {"city": "Sydney",       "country": "AU",  "lat": -33.87, "lon": 151.21},
-    {"city": "Paris",        "country": "FR",  "lat": 48.85,  "lon": 2.35},
-    {"city": "Dubai",        "country": "AE",  "lat": 25.20,  "lon": 55.27},
-    {"city": "São Paulo",    "country": "BR",  "lat": -23.55, "lon": -46.63},
-    {"city": "Mumbai",       "country": "IN",  "lat": 19.08,  "lon": 72.88},
-    {"city": "Cairo",        "country": "EG",  "lat": 30.06,  "lon": 31.25},
-    {"city": "Toronto",      "country": "CA",  "lat": 43.65,  "lon": -79.38},
-    {"city": "Mexico City",  "country": "MX",  "lat": 19.43,  "lon": -99.13},
-    {"city": "Beijing",      "country": "CN",  "lat": 39.91,  "lon": 116.39},
-    {"city": "Moscow",       "country": "RU",  "lat": 55.75,  "lon": 37.62},
-    {"city": "Lagos",        "country": "NG",  "lat": 6.45,   "lon": 3.40},
-    {"city": "Buenos Aires", "country": "AR",  "lat": -34.61, "lon": -58.38},
-    {"city": "Seoul",        "country": "KR",  "lat": 37.57,  "lon": 126.98},
-    {"city": "Jakarta",      "country": "ID",  "lat": -6.21,  "lon": 106.85},
-    {"city": "Cape Town",    "country": "ZA",  "lat": -33.93, "lon": 18.42},
-    {"city": "Nairobi",      "country": "KE",  "lat": -1.29,  "lon": 36.82},
-    {"city": "Berlin",       "country": "DE",  "lat": 52.52,  "lon": 13.40},
+    {"city": "New York",     "country": "US", "usaf": "744860", "wban": "94789"},
+    {"city": "London",       "country": "GB", "usaf": "037720", "wban": "99999"},
+    {"city": "Tokyo",        "country": "JP", "usaf": "476710", "wban": "99999"},
+    {"city": "Sydney",       "country": "AU", "usaf": "947675", "wban": "99999"},
+    {"city": "Paris",        "country": "FR", "usaf": "071570", "wban": "99999"},
+    {"city": "Dubai",        "country": "AE", "usaf": "411940", "wban": "99999"},
+    {"city": "São Paulo",    "country": "BR", "usaf": "837810", "wban": "99999"},
+    {"city": "Mumbai",       "country": "IN", "usaf": "430020", "wban": "99999"},
+    {"city": "Cairo",        "country": "EG", "usaf": "623660", "wban": "99999"},
+    {"city": "Toronto",      "country": "CA", "usaf": "726240", "wban": "99999"},
+    {"city": "Mexico City",  "country": "MX", "usaf": "766793", "wban": "99999"},
+    {"city": "Beijing",      "country": "CN", "usaf": "545110", "wban": "99999"},
+    {"city": "Moscow",       "country": "RU", "usaf": "275243", "wban": "99999"},
+    {"city": "Lagos",        "country": "NG", "usaf": "652030", "wban": "99999"},
+    {"city": "Buenos Aires", "country": "AR", "usaf": "875850", "wban": "99999"},
+    {"city": "Seoul",        "country": "KR", "usaf": "471080", "wban": "99999"},
+    {"city": "Jakarta",      "country": "ID", "usaf": "967410", "wban": "99999"},
+    {"city": "Cape Town",    "country": "ZA", "usaf": "688160", "wban": "99999"},
+    {"city": "Nairobi",      "country": "KE", "usaf": "637400", "wban": "99999"},
+    {"city": "Berlin",       "country": "DE", "usaf": "103890", "wban": "99999"},
 ]
 
-# Open-Meteo WMO weather code → human-readable label
-WMO_CODES = {
-    0: "Clear Sky", 1: "Mainly Clear", 2: "Partly Cloudy", 3: "Overcast",
-    45: "Foggy", 48: "Icy Fog",
-    51: "Light Drizzle", 53: "Moderate Drizzle", 55: "Dense Drizzle",
-    61: "Slight Rain", 63: "Moderate Rain", 65: "Heavy Rain",
-    71: "Slight Snow", 73: "Moderate Snow", 75: "Heavy Snow",
-    80: "Slight Showers", 81: "Moderate Showers", 82: "Violent Showers",
-    95: "Thunderstorm", 96: "Thunderstorm w/ Hail", 99: "Thunderstorm w/ Heavy Hail",
-}
+# NOAA GSOD temperature / dew-point are in °F; wind in knots; precip in inches
+# 999.9 / 9999.9 are NOAA sentinel "missing" values
 
-BASE_URL = "https://api.open-meteo.com/v1/forecast"
-
-SCHEMA = StructType([
+OUTPUT_SCHEMA = StructType([
     StructField("city",             StringType(),  False),
     StructField("country",          StringType(),  False),
-    StructField("lat",              FloatType(),   False),
-    StructField("lon",              FloatType(),   False),
+    StructField("usaf",             StringType(),  False),
     StructField("temp_c",           FloatType(),   True),
-    StructField("feels_like_c",     FloatType(),   True),
-    StructField("humidity_pct",     IntegerType(), True),
+    StructField("feels_like_c",     FloatType(),   True),   # derived from dewpoint
+    StructField("humidity_pct",     IntegerType(), True),   # derived from temp + dewpoint
     StructField("wind_speed_kmh",   FloatType(),   True),
-    StructField("wind_direction",   IntegerType(), True),
     StructField("precipitation_mm", FloatType(),   True),
-    StructField("weather_code",     IntegerType(), True),
     StructField("weather_desc",     StringType(),  True),
     StructField("fetched_date",     DateType(),    False),
 ])
 
 
-def _fetch_city(city_meta: dict) -> dict:
-    """Call Open-Meteo for one city and return a flat record."""
-    params = {
-        "latitude":            city_meta["lat"],
-        "longitude":           city_meta["lon"],
-        "current":             [
-            "temperature_2m",
-            "apparent_temperature",
-            "relative_humidity_2m",
-            "wind_speed_10m",
-            "wind_direction_10m",
-            "precipitation",
-            "weather_code",
-        ],
-        "wind_speed_unit":     "kmh",
-        "timezone":            "UTC",
-        "forecast_days":       1,
-    }
-    resp = requests.get(BASE_URL, params=params, timeout=15)
-    resp.raise_for_status()
-    cur = resp.json()["current"]
+def _f_to_c(f):
+    """Fahrenheit → Celsius, returns None for NOAA missing sentinel (999.9)."""
+    if f is None or f >= 999.9:
+        return None
+    return round((f - 32.0) * 5.0 / 9.0, 1)
 
-    wcode = int(cur.get("weather_code", 0) or 0)
-    return {
-        "city":             city_meta["city"],
-        "country":          city_meta["country"],
-        "lat":              float(city_meta["lat"]),
-        "lon":              float(city_meta["lon"]),
-        "temp_c":           float(cur.get("temperature_2m") or 0),
-        "feels_like_c":     float(cur.get("apparent_temperature") or 0),
-        "humidity_pct":     int(cur.get("relative_humidity_2m") or 0),
-        "wind_speed_kmh":   float(cur.get("wind_speed_10m") or 0),
-        "wind_direction":   int(cur.get("wind_direction_10m") or 0),
-        "precipitation_mm": float(cur.get("precipitation") or 0),
-        "weather_code":     wcode,
-        "weather_desc":     WMO_CODES.get(wcode, f"Code {wcode}"),
-        "fetched_date":     date.today(),
-    }
+
+def _knots_to_kmh(k):
+    """Knots → km/h, returns None for sentinel (999.9)."""
+    if k is None or k >= 999.9:
+        return None
+    return round(k * 1.852, 1)
+
+
+def _in_to_mm(inches):
+    """Inches → mm; 99.99 is NOAA trace/missing sentinel."""
+    if inches is None or inches >= 99.99:
+        return 0.0
+    return round(inches * 25.4, 1)
+
+
+def _humidity(temp_c, dewp_c):
+    """Approximate relative humidity (%) from temperature and dew-point (°C)."""
+    if temp_c is None or dewp_c is None:
+        return None
+    # Magnus formula approximation
+    import math
+    rh = 100.0 * math.exp((17.625 * dewp_c) / (243.04 + dewp_c)) / \
+         math.exp((17.625 * temp_c) / (243.04 + temp_c))
+    return max(0, min(100, round(rh)))
+
+
+def _weather_desc(rain, snow, thunder, fog):
+    """Build a human-readable condition string from NOAA indicator flags."""
+    flags = []
+    if thunder == "1":
+        flags.append("Thunderstorm")
+    if snow == "1":
+        flags.append("Snow")
+    if rain == "1":
+        flags.append("Rain")
+    if fog == "1":
+        flags.append("Fog")
+    return ", ".join(flags) if flags else "Clear / Partly Cloudy"
 
 
 def main(spark):
-    """Fetch weather for all cities and persist to analytics.world_weather."""
-    logger.info(f"Fetching weather for {len(CITIES)} cities via Open-Meteo …")
+    """Fetch NOAA GSOD weather for all cities and persist to analytics.world_weather."""
 
+    usaf_list = [c["usaf"] for c in CITIES]
+    wban_list  = [c["wban"] for c in CITIES]
+
+    # ── 1. Read from NOAA GSOD 2025 (BigQuery public dataset) ────────────────
+    logger.info("Reading NOAA GSOD 2025 from BigQuery public dataset …")
+    gsod = (
+        spark.read.format("bigquery")
+        .option("table", "bigquery-public-data.noaa_gsod.gsod2025")
+        .load()
+        .filter(F.col("stn").isin(usaf_list))
+    )
+
+    # Pick the most recent date that has data for our stations
+    max_date_row = gsod.agg(F.max("date").alias("max_date")).collect()[0]
+    max_date = max_date_row["max_date"]
+    logger.info(f"Most recent GSOD date available: {max_date}")
+
+    # For each station keep only the latest available date (may vary by station)
+    window = __import__("pyspark.sql.window", fromlist=["Window"]).Window \
+        .partitionBy("stn", "wban") \
+        .orderBy(F.col("date").desc())
+
+    latest = (
+        gsod
+        .withColumn("rn", F.row_number().over(window))
+        .filter(F.col("rn") == 1)
+        .drop("rn")
+        .select("stn", "wban", "date", "temp", "dewp", "wdsp",
+                "prcp", "rain_drizzle", "snow_ice_pellets", "thunder", "fog")
+        .collect()
+    )
+
+    # Index by (usaf, wban) for fast lookup
+    gsod_map = {(r["stn"], r["wban"]): r for r in latest}
+    logger.info(f"Station rows fetched: {len(gsod_map)}")
+
+    # ── 2. Build output records ───────────────────────────────────────────────
     records = []
-    for city_meta in CITIES:
-        try:
-            record = _fetch_city(city_meta)
-            records.append(record)
-            logger.info(
-                f"  {city_meta['city']:15s} → {record['temp_c']:.1f}°C  "
-                f"{record['weather_desc']}"
-            )
-        except Exception as exc:
-            logger.warning(f"  {city_meta['city']} – skipped ({exc})")
+    for meta in CITIES:
+        key = (meta["usaf"], meta["wban"])
+        row = gsod_map.get(key)
+        if row is None:
+            logger.warning(f"  {meta['city']:15s} – no data found, skipping")
+            continue
+
+        temp_c    = _f_to_c(float(row["temp"]))  if row["temp"]  else None
+        dewp_c    = _f_to_c(float(row["dewp"]))  if row["dewp"]  else None
+        wind_kmh  = _knots_to_kmh(float(row["wdsp"])) if row["wdsp"] else None
+        prcp_mm   = _in_to_mm(float(row["prcp"])) if row["prcp"] else 0.0
+        humidity  = _humidity(temp_c, dewp_c)
+        # Feels-like: simplified — dew-point offset as proxy
+        feels_c   = round(temp_c + (dewp_c - temp_c) * 0.15, 1) \
+                    if temp_c is not None and dewp_c is not None else temp_c
+        desc      = _weather_desc(row["rain_drizzle"], row["snow_ice_pellets"],
+                                  row["thunder"], row["fog"])
+
+        from datetime import date as date_cls
+        record = {
+            "city":             meta["city"],
+            "country":          meta["country"],
+            "usaf":             meta["usaf"],
+            "temp_c":           float(temp_c) if temp_c is not None else None,
+            "feels_like_c":     float(feels_c) if feels_c is not None else None,
+            "humidity_pct":     int(humidity) if humidity is not None else None,
+            "wind_speed_kmh":   float(wind_kmh) if wind_kmh is not None else None,
+            "precipitation_mm": float(prcp_mm),
+            "weather_desc":     desc,
+            "fetched_date":     date_cls.fromisoformat(str(row["date"])),
+        }
+        records.append(record)
+        logger.info(
+            f"  {meta['city']:15s} → {record['temp_c']}°C  "
+            f"humidity {record['humidity_pct']}%  {desc}  ({row['date']})"
+        )
 
     if not records:
         raise RuntimeError("No weather records fetched – aborting.")
 
-    df = spark.createDataFrame(records, schema=SCHEMA)
+    # ── 3. Write to Iceberg ───────────────────────────────────────────────────
+    df = spark.createDataFrame(records, schema=OUTPUT_SCHEMA)
     df.writeTo("analytics.world_weather").createOrReplace()
-
     logger.info(f"Wrote {df.count()} rows to analytics.world_weather")
