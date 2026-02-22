@@ -1,0 +1,17 @@
+name: world-weather
+description: "Fetches live weather for 20 major world cities from the Open-Meteo public API and publishes a temperature dashboard"
+schedule: "0 8 * * *"  # Daily at 8 AM UTC
+
+tasks:
+  - name: fetch
+    type: python
+    function: functions/fetch_world_weather.py
+    entrypoint: main
+
+  - name: visualize
+    type: python
+    function: functions/visualize_world_weather.py
+    entrypoint: main
+    vizId: world-weather-dashboard
+    depends_on:
+      - fetch
