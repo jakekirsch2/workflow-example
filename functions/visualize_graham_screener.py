@@ -8,7 +8,7 @@ def main(spark):
     """
     Read today's Graham screener results and publish a multi-chart dashboard.
     Returns a list of viz specs for the platform vizId publisher.
-    Qualified stocks table appears first.
+    Table of qualified stocks is now at the top for immediate visibility.
     """
     df = spark.table("analytics.graham_screener_results")
 
@@ -21,109 +21,99 @@ def main(spark):
 
     if total_count == 0:
         logger.warning("No stocks to visualize for today")
-        return [{"type": "metric", "title": "Graham-Qualifying Stocks Today", "value": 0}]
+        return [{
+            "type": "metric",
+            "title": "Graham-Qualifying Stocks Today",
+            "value": 0
+        }]
 
     rows = df_today.collect()
 
     # ── Pull scalar metrics from first row ───────────────────────────────────
-    aa_yield  = round(rows[0]["aa_yield_pct"], 4) if rows[0]["aa_yield_pct"] else 0
-    fair_pe   = round(rows[0]["fair_pe"], 2) if rows[0]["fair_pe"] else 0
+    aa_yield = round(rows[0]["aa_yield_pct"], 4) if rows else 4.5
+    fair_pe = round(rows[0]["fair_pe"], 2) if rows else 22.2
 
-    # ── Build qualified stocks table (sorted by discount) ──────────────────────
-    # Convert to dicts, sorted by discount_pct descending (most undervalued first)
-    stocks_table = [
+    # ── Build table data (sorted by discount %) ──────────────────────────────
+    table_data = []
+    for row in rows:
+        table_data.append({
+            "symbol": row["symbol"],
+            "price": round(float(row["current_price"]), 2),
+            "p_e": round(float(row["pe_ratio"]), 2),
+            "eps": round(float(row["eps"]), 2) if row["eps"] else None,
+            "margin_of_safety_pct": round(float(row["discount_pct"]), 1),
+            "market_cap_b": round(float(row["market_cap"]) / 1e9, 2) if row["market_cap"] else None,
+        })
+
+    # Sort by margin of safety (highest first)
+    table_data = sorted(table_data, key=lambda x: x["margin_of_safety_pct"], reverse=True)
+
+    # ── Build chart data (top 10 by margin of safety) ────────────────────────
+    chart_data = table_data[:10]
+
+    # ── Visualization dashboard (TABLE FIRST) ────────────────────────────────
+    viz_specs = [
+        # 1. QUALIFIED STOCKS TABLE (TOP) — Main insight
         {
-            "symbol": r["symbol"],
-            "price": round(float(r["current_price"]), 2),
-            "pe": round(float(r["pe_ratio"]), 2),
-            "fair_pe": round(float(r["fair_pe"]), 2),
-            "discount": round(float(r["discount_pct"]), 1),  # margin of safety %
-            "market_cap_b": round(float(r["market_cap"]) / 1e9, 1) if r["market_cap"] else None,
-        }
-        for r in rows
-    ]
-    stocks_table.sort(key=lambda x: x["discount"], reverse=True)
+            "type": "table",
+            "title": f"Graham-Qualified Stocks ({total_count} found) — Sorted by Margin of Safety",
+            "columns": ["symbol", "price", "p_e", "eps", "margin_of_safety_pct", "market_cap_b"],
+            "data": table_data,
+        },
 
-    # ── Build bar chart: P/E vs Fair P/E ──────────────────────────────────────
-    chart_data = [
+        # 2. Key metrics row
         {
-            "symbol": s["symbol"],
-            "current_pe": s["pe"],
-            "fair_pe": s["fair_pe"],
-        }
-        for s in stocks_table[:20]  # Top 20 most undervalued
-    ]
-
-    # ── Build market cap distribution ────────────────────────────────────────
-    mcap_data = [
+            "type": "metric",
+            "title": "Total Graham Qualifiers",
+            "value": total_count,
+        },
         {
-            "symbol": s["symbol"],
-            "market_cap_b": s["market_cap_b"] if s["market_cap_b"] else 0,
-        }
-        for s in stocks_table
-        if s["market_cap_b"]  # Only include if we have market cap data
-    ]
-    mcap_data.sort(key=lambda x: x["market_cap_b"], reverse=True)
-    mcap_data = mcap_data[:15]  # Top 15 by market cap
+            "type": "metric",
+            "title": "Fair P/E (AA Yield Implied)",
+            "value": fair_pe,
+        },
+        {
+            "type": "metric",
+            "title": "AA Corporate Bond Yield",
+            "value": aa_yield,
+            "unit": "%",
+        },
 
-    # ── Build visualizations in order ─────────────────────────────────────────
-    vizs = []
-
-    # 1️⃣ QUALIFIED STOCKS TABLE (TOP) ───────────────────────────────────────────
-    vizs.append({
-        "type": "table",
-        "title": f"Graham-Qualified Stocks ({total_count} found)",
-        "description": f"Stocks with P/E below {fair_pe}x (AA yield: {aa_yield}%)",
-        "columns": ["symbol", "price", "pe", "fair_pe", "discount", "market_cap_b"],
-        "data": stocks_table,
-    })
-
-    # 2️⃣ Key Metrics ───────────────────────────────────────────────────────────
-    vizs.append({
-        "type": "metric",
-        "title": "Total Graham-Qualified Stocks",
-        "value": total_count,
-        "unit": "stocks",
-    })
-
-    vizs.append({
-        "type": "metric",
-        "title": "Fair P/E Ratio",
-        "value": fair_pe,
-        "unit": "x",
-    })
-
-    vizs.append({
-        "type": "metric",
-        "title": "AA Corporate Bond Yield",
-        "value": aa_yield,
-        "unit": "%",
-    })
-
-    # 3️⃣ P/E Comparison Chart ──────────────────────────────────────────────────
-    if chart_data:
-        vizs.append({
+        # 3. Top 10 by margin of safety
+        {
             "type": "bar",
-            "title": "P/E vs Fair P/E (Top 20 Undervalued)",
+            "title": "Top 10 Graham Bargains (by Margin of Safety %)",
             "data": chart_data,
             "xKey": "symbol",
             "series": [
-                {"key": "current_pe", "label": "Current P/E", "color": "#ef4444"},
-                {"key": "fair_pe", "label": "Fair P/E", "color": "#10b981"},
+                {
+                    "key": "margin_of_safety_pct",
+                    "label": "Margin of Safety (%)",
+                    "color": "#10b981",  # Green
+                }
             ],
-        })
+        },
 
-    # 4️⃣ Market Cap Distribution ──────────────────────────────────────────────
-    if mcap_data:
-        vizs.append({
+        # 4. P/E comparison to fair value
+        {
             "type": "bar",
-            "title": "Market Cap Distribution (Top 15 by size)",
-            "data": mcap_data,
+            "title": "P/E Ratio vs. Fair Value (Fair P/E = " + str(fair_pe) + "x)",
+            "data": chart_data,
             "xKey": "symbol",
             "series": [
-                {"key": "market_cap_b", "label": "Market Cap (B)", "color": "#3b82f6"},
+                {
+                    "key": "p_e",
+                    "label": "Current P/E",
+                    "color": "#3b82f6",  # Blue
+                },
+                {
+                    "key": "fair_pe",
+                    "label": "Fair P/E",
+                    "color": "#ef4444",  # Red (reference line)
+                }
             ],
-        })
+        },
+    ]
 
-    logger.info(f"Built dashboard with {len(vizs)} visualizations")
-    return vizs
+    logger.info(f"Generated dashboard with {len(viz_specs)} visualizations")
+    return viz_specs
