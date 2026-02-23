@@ -80,16 +80,20 @@ def main(spark):
         row_dict = {
             "symbol":        r["symbol"],
             "company":       r["company_name"],
-            "sector":        r.get("sector") or "",
+            "sector":        r["sector"] or "",
             "price":         round(r["price"] or 0, 2),
             "pe_ratio":      round(r["pe_ratio"] or 0, 2),
             "market_cap_b":  round((r["market_cap"] or 0) / 1e9, 2),
-            "beta":          round(r.get("beta") or 0, 2),
-            "div_yield_pct": round((r.get("dividend_yield") or 0), 4),
+            "beta":          round(r["beta"] or 0, 2),
+            "div_yield_pct": round((r["dividend_yield"] or 0), 4),
         }
-        # Include industry if it exists (optional field)
-        if "industry" in r.asDict():
-            row_dict["industry"] = r.get("industry") or ""
+        # Include industry if it exists in the row
+        try:
+            industry = r["industry"]
+            if industry:
+                row_dict["industry"] = industry
+        except (IndexError, KeyError):
+            pass
         table_data.append(row_dict)
 
     table_columns = ["symbol", "company", "sector", "price",
