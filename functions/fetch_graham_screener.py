@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 # ── Test guard ─────────────────────────────────────────────────────────────────
 # On the first test run we only process a small sample of stocks.
 # Set to None to run the full S&P 500 list.
-TEST_STOCK_SAMPLE = 20  # Test with 20 stocks; set to None for full S&P 500
+TEST_STOCK_SAMPLE = None  # Run full S&P 500
 # ─────────────────────────────────────────────────────────────────────────────
 
 # A curated list of large-cap, liquid stocks across sectors for testing/demo
@@ -39,10 +39,6 @@ def fetch_sp500_list():
     Returns a list of ticker symbols.
     """
     try:
-        # yfinance has a built-in S&P 500 symbol fetcher
-        sp500_df = yf.data.get_data_yahoo('^GSPC', start='2020-01-01', end='2020-01-02')
-        # This won't work; let's use a direct web scrape instead
-        
         # Fetch S&P 500 constituents from Wikipedia
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         response = requests.get(url, timeout=10)
