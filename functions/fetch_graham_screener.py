@@ -76,6 +76,7 @@ def fetch_stock_data(symbol: str) -> dict:
             "name": info.get("longName") or info.get("shortName") or "",
             "sector": info.get("sector") or "",
             "industry": info.get("industry") or "",
+            "exchange": info.get("exchange") or "NYSE",  # default to NYSE if not found
             "marketCap": info.get("marketCap"),
             "price": info.get("currentPrice"),
             "trailingPE": info.get("trailingPE"),
@@ -176,6 +177,7 @@ def main(spark):
     )
 
     # ── Step 4: Build rows for Iceberg ───────────────────────────────────────
+    # Note: yfinance dividendYield is already in decimal form (e.g., 0.0206 = 2.06%)
     run_date = date.today().isoformat()
 
     rows = []
@@ -183,7 +185,9 @@ def main(spark):
         pe = float(s.get("trailingPE") or s.get("forwardPE") or 0.0)
         price = float(s.get("price") or 0.0)
         mkt_cap = float(s.get("marketCap") or 0.0)
-        div_yield_pct = float(s.get("dividendYield") or 0.0) * 100.0  # yfinance returns as decimal
+        # yfinance returns dividendYield as a decimal; convert to percentage
+        div_yield_decimal = float(s.get("dividendYield") or 0.0)
+        div_yield_pct = div_yield_decimal * 100.0
         beta = float(s.get("beta") or 0.0)
 
         rows.append({
@@ -195,6 +199,7 @@ def main(spark):
             "company_name":   str(s.get("name", "") or ""),
             "sector":         str(s.get("sector", "") or ""),
             "industry":       str(s.get("industry", "") or ""),
+            "exchange":       str(s.get("exchange", "") or "NYSE"),
             "price":          price,
             "pe_ratio":       pe,
             "market_cap":     mkt_cap,
@@ -213,6 +218,7 @@ def main(spark):
             "run_date": run_date, "yield_date": yield_date,
             "aa_yield_pct": float(aa_yield_pct), "max_pe": float(round(max_pe, 4)),
             "symbol": "", "company_name": "NO_RESULTS", "sector": "", "industry": "",
+            "exchange": "NYSE",
             "price": 0.0, "pe_ratio": 0.0, "market_cap": 0.0,
             "volume": 0.0, "avg_volume": 0.0, "year_high": 0.0, "year_low": 0.0,
             "beta": 0.0, "dividend_yield": 0.0, "is_test_run": True,
@@ -231,6 +237,7 @@ def main(spark):
         StructField("company_name",   StringType(),  True),
         StructField("sector",         StringType(),  True),
         StructField("industry",       StringType(),  True),
+        StructField("exchange",       StringType(),  True),
         StructField("price",          DoubleType(),  True),
         StructField("pe_ratio",       DoubleType(),  True),
         StructField("market_cap",     DoubleType(),  True),
