@@ -80,7 +80,7 @@ def main(spark):
             "symbol":        r["symbol"],
             "company":       r["company_name"],
             "sector":        r["sector"] or "",
-            "exchange":      r["exchange"] or "",
+            "industry":      r["industry"] or "",
             "price":         round(r["price"] or 0, 2),
             "pe_ratio":      round(r["pe_ratio"] or 0, 2),
             "market_cap_b":  round((r["market_cap"] or 0) / 1e9, 2),
@@ -92,7 +92,7 @@ def main(spark):
     table_chart = {
         "type":    "table",
         "title":   f"Top 30 Graham-Qualifying Stocks by Market Cap {'(TEST — 1 page)' if is_test else ''}",
-        "columns": ["symbol", "company", "sector", "exchange", "price",
+        "columns": ["symbol", "company", "sector", "industry", "price",
                     "pe_ratio", "market_cap_b", "beta", "div_yield_pct"],
         "data":    table_data,
     }
